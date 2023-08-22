@@ -3,8 +3,13 @@
 package google
 
 import (
+	"crypto/rand"
+	"crypto/sha256"
+	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"io/ioutil"
 	"net/http"
 	"net/url"
@@ -16,10 +21,36 @@ import (
 
 const endpointProfile string = "https://www.googleapis.com/oauth2/v2/userinfo"
 
+func randomBytesInHex(count int) (string, error) {
+	buf := make([]byte, count)
+	_, err := io.ReadFull(rand.Reader, buf)
+	if err != nil {
+		return "", fmt.Errorf("Could not generate %d random bytes: %v", count, err)
+	}
+
+	return hex.EncodeToString(buf), nil
+}
+
+func generateCodeChallenge() (string, error) {
+	codeVerifier, verifierErr := randomBytesInHex(32) // 64 character string here
+	if verifierErr != nil {
+		return "", fmt.Errorf("Could not create a code verifier: %v", verifierErr)
+	}
+	sha2 := sha256.New()
+	io.WriteString(sha2, codeVerifier)
+	codeChallenge := base64.RawURLEncoding.EncodeToString(sha2.Sum(nil))
+
+	return codeChallenge, nil
+}
+
 // New creates a new Google provider, and sets up important connection details.
 // You should always call `google.New` to get a new Provider. Never try to create
 // one manually.
 func New(clientKey, secret, callbackURL string, scopes ...string) *Provider {
+	codeChallenge, _ := generateCodeChallenge()
+	var CodeChallenge oauth2.AuthCodeOption = oauth2.SetAuthURLParam("code_challenge", codeChallenge)
+	var CodeChallengeMethod oauth2.AuthCodeOption = oauth2.SetAuthURLParam("code_challenge_method", "S256")
+
 	p := &Provider{
 		ClientKey:    clientKey,
 		Secret:       secret,
@@ -30,6 +61,8 @@ func New(clientKey, secret, callbackURL string, scopes ...string) *Provider {
 		// See https://developers.google.com/identity/protocols/oauth2/openid-connect#access-type-param
 		authCodeOptions: []oauth2.AuthCodeOption{
 			oauth2.AccessTypeOffline,
+			CodeChallenge,
+			CodeChallengeMethod,
 		},
 	}
 	p.config = newConfig(p, scopes)
